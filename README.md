@@ -1,16 +1,29 @@
-- Build p4 in Docker [/int/p4src]:
+- Build docker with Dockerfile [.]
+
+**Note: Use this command in a path same as Dockerfile file**
+```
+docker build -t p4-env:v1.0 . --no-cache
+```
+- Run p4-env docker [.]
+
+**Note: Use this command in a path same as .git file**
+```
+docker run --name env --net=host --cap-add=NET_ADMIN --privileged -v /var/run/docker.sock:/var/run/docker.sock -v /usr/local/lib/docker:/usr/bin/docker -v $(readlink -f .):/AlgorithmSRv6 -w /AlgorithmSRv6 -dit p4-env:v1.0
+docker exec -it env bash
+```
+- Build p4 in Docker [/AlgorithmSRv6/p4src]:
 ```
 p4c --target bmv2 --arch v1model main.p4
 ```
-- Setup envoriment [/int]:
+- Setup envoriment [/AlgorithmSRv6]:
 ```
 python run_demo.py topo/tree_topo
 ```
-- Use Controller to add entries [/int]:
+- Use Controller to add entries [/AlgorithmSRv6]:
 ```
 python controller.py
 ```
-- Clean everything [/int]:
+- Clean everything [/AlgorithmSRv6]:
 ```
 bash clean_demo.sh
 ```
