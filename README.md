@@ -1,3 +1,4 @@
+## How to use this work
 - Build docker with Dockerfile [Path: .](https://github.com/SmartSloth/AlgorithmSRv6)
 
 **Note: Use this command in a path same as Dockerfile file**
@@ -34,3 +35,8 @@ bash clean_demo.sh
 4. Use iperf test UDP: 
     - In Server: `iperf –s -u –p 521 –i 1 -V`
     - In Client: `iperf -c 2001::33:101 -u -p 521 -i 1 -t 10 -V`
+## Frequently-used Link/File:
+- [runtime_CLI.py](https://github.com/p4lang/behavioral-model/blob/27c235944492ef55ba061fcf658b4d8102d53bd8/tools/runtime_CLI.py)
+- [runtime_CLI.md](https://github.com/p4lang/behavioral-model/blob/27c235944492ef55ba061fcf658b4d8102d53bd8/docs/runtime_CLI.md)
+- The [command](https://github.com/p4lang/behavioral-model/blob/main/targets/l2_switch/commands.txt) to create multicast
+- Protocol source file [standard.thrift](https://github.com/p4lang/behavioral-model/blob/27c235944492ef55ba061fcf658b4d8102d53bd8/thrift_src/standard.thrift)
