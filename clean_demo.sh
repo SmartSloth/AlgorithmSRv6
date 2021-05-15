@@ -1,6 +1,6 @@
 # sudo killall lt-simple_switch
 ps -ef | grep simple_switch | grep -v grep | awk '{print $2}' | xargs kill -9
-for i in $(seq 0 36)
+for i in $(seq 0 4)
 do
     ip netns del ns$i &> /dev/null
     ip link delete s$i-tin &> /dev/null

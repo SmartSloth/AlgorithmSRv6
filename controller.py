@@ -9,6 +9,7 @@ import random
 import pickle
 import threading
 import traceback
+from types import LambdaType
 import netifaces
 import subprocess
 import networkx as nx
@@ -19,14 +20,16 @@ from include.class_define import SWITCH, thrift_connect
 
 MGR_PORTNUM = 15
 TIN_PORTNUM = 7
-DEFAULT_MC_MGRP = 1
+DEFAULT_BROADCAST_GROUP_ID = 1
+DEFAULT_HOST_ECMP_GROUP = 5
 
 
 class Controller():
     def __init__(self):
         self.SWITCH_NUM = 0
         self.TOR_LIST = {}  # switch.name:host_ipv6
-        self.TOPO_FILE = "/int/topo/tree_topo"
+        # self.TOPO_FILE = "/int/topo/tree_topo"
+        self.TOPO_FILE = "/int/topo/leaf_spine_topo"
         self.GRAPH = nx.Graph()
         self.LAYERS = []
         self.LAYER_NUMBER = 0
@@ -71,9 +74,15 @@ class Controller():
         if core != "":
             core = [_[1:] for _ in core.split(",")]
             sws = sws + core
+        print(tors)
+        print(core)
         if len(tors) > 0:
             for sw_index in tors:
-                self.TOR_LIST[sw_index] = getHostIpv6FromIndex(sw_index)
+                self.TOR_LIST[sw_index] = [
+                    getHostIpv6FromIndex(sw_index),
+                    getHostMacFromIndex(sw_index)
+                ]
+
         # print(sws)
         nodes = [str("s" + str(i)) for i in sws]
         color_map = {}
@@ -121,11 +130,22 @@ class Controller():
         return links
 
     # IngressPipeImpl.ndp_reply_table(hdr.ndp.target_ipv6_addr)
-    def writeNdpReply(self, switch, targetIpv6Addr, targetMac):
+    def writeNdpNsReply(self, switch, targetIpv6Addr, targetMac):
         info = switch.table_add_exact(table="IngressPipeImpl.ndp_reply_table",
                                       match_key=[str(targetIpv6Addr)],
                                       match_key_types=['ipv6'],
                                       action="IngressPipeImpl.ndp_ns_to_na",
+                                      runtime_data=[str(targetMac)],
+                                      runtime_data_types=['mac'])
+        print("Insert ndp_reply_table on %s successfully: %s" %
+              (switch.name, info))
+        return info
+
+    def writeNdpRsReply(self, switch, targetIpv6Addr, targetMac):
+        info = switch.table_add_exact(table="IngressPipeImpl.ndp_reply_table",
+                                      match_key=[str(targetIpv6Addr)],
+                                      match_key_types=['ipv6'],
+                                      action="IngressPipeImpl.ndp_rs_to_ra",
                                       runtime_data=[str(targetMac)],
                                       runtime_data_types=['mac'])
         print("Insert ndp_reply_table on %s successfully: %s" %
@@ -195,10 +215,10 @@ class Controller():
         return mgrp_hdl, l1_hdl, message
 
     # IngressPipeImpl.l2_ternary_table(hdr.ethernet.dst_addr)
-    def writeL2TernaryTable(self, switch, ethDstAddr, multicastGroup):
+    def writeL2TernaryTable(self, switch, ethDstAddr, ethMask, multicastGroup):
         info = switch.table_add_ternary(
             table="IngressPipeImpl.l2_ternary_table",
-            match_key=[ethDstAddr, "ff:ff:ff:ff:ff:00"],
+            match_key=[ethDstAddr, ethMask],
             match_key_types=['mac', '48'],
             action="IngressPipeImpl.set_multicast_group",
             runtime_data=[str(multicastGroup)],
@@ -254,6 +274,33 @@ class Controller():
         print("Insert ecmp_routing_v6_table on %s successfully: %s" %
               (switch.name, info))
         return info
+
+    def writeEcmpHostRoutingTable(self, switch, dstIpv6Addr, grp_handle):
+        print("To host: switch is %s, dstIpv6Addr is %s, grp_handle is %s" %
+              (switch.name, dstIpv6Addr, grp_handle))
+        info = switch.add_entry_to_group(
+            table_name="IngressPipeImpl.ecmp_routing_v6_table",
+            match_key=[dstIpv6Addr, "128"],
+            match_key_types=["ipv6", "32"],
+            grp_handle=int(grp_handle))
+        print("Insert ecmp_routing_v6_table on %s successfully: %s" %
+              (switch.name, info))
+        return info
+
+    def createHostEcmpGroup(self, switch, mac):
+        grp_hdl = switch.create_group("IngressPipeImpl.ecmp_selector")
+
+        mbr_hdl = switch.act_prof_add_member(
+            action_profile_name="IngressPipeImpl.ecmp_selector",
+            action_name="IngressPipeImpl.set_next_hop",
+            runtime_data=[mac],
+            runtime_data_types=['mac'])
+
+        switch.add_member_to_group(
+            action_profile_name="IngressPipeImpl.ecmp_selector",
+            mbr_handle=mbr_hdl,
+            grp_handle=grp_hdl)
+        return grp_hdl
 
     def createEcmpSelectorGroup(self, switch, downstreamGroupSwitches,
                                 upstreamGroupSwitches):
@@ -359,25 +406,67 @@ class Controller():
             entry_hdl = self.writeRmacTable(sw, sw.mgr_mac)
             entry_hdl_map["IngressPipeImpl.rmac"].append(entry_hdl)
 
+            entry_hdl = self.writeL2ExactTable(sw, sw.mgr_mac, MGR_PORTNUM)
+            entry_hdl_map["IngressPipeImpl.l2_exact_table"].append(entry_hdl)
+
+            # mgrp_hdl, l1_hdl, message = self.createL2MulticastGroup(
+            #     sw, DEFAULT_BROADCAST_GROUP_ID, str(TIN_PORTNUM))
+            # self.MC_GROUP_HANDLE[sw.name] = [mgrp_hdl, l1_hdl, message]
+
             mgrp_hdl, l1_hdl, message = self.createL2MulticastGroup(
-                sw, DEFAULT_MC_MGRP, str(TIN_PORTNUM))
+                sw, DEFAULT_BROADCAST_GROUP_ID, str(TIN_PORTNUM))
             self.MC_GROUP_HANDLE[sw.name] = [mgrp_hdl, l1_hdl, message]
 
-            entry_hdl = self.writeL2TernaryTable(sw, sw.mgr_mac, mgrp_hdl)
+            entry_hdl = self.writeL2TernaryTable(sw, "ff:ff:ff:ff:ff:ff",
+                                                 "ff:ff:ff:ff:ff:ff", mgrp_hdl)
             entry_hdl_map["IngressPipeImpl.l2_ternary_table"].append(entry_hdl)
 
+            entry_hdl = self.writeL2TernaryTable(sw, "33:33:00:00:00:00",
+                                                 "ff:ff:00:00:00:00", mgrp_hdl)
+            entry_hdl_map["IngressPipeImpl.l2_ternary_table"].append(entry_hdl)
+
+            # ports_ipv6 = list(sw.next_hop.keys())
+            # print(ports_ipv6)
+            # for i in range(len(ports_ipv6)):
+            #     tmp = getIpv6ByPortName(ports_ipv6[i])
+            #     ports_ipv6[i] = tmp
+            # if str(sw.index) in self.TOR_LIST.keys():
+            #     ports_ipv6.append(getIpv6ByPortName(sw.name + "-tin"))
+            # ports_ipv6.append(getIpv6ByPortName(sw.name + "-mgr"))
+            # ports_ipv6 = list(set(ports_ipv6))
+            # print(ports_ipv6)
+            # for ipv6 in ports_ipv6:
+            #     entry_hdl = self.writeNdpReply(sw, ipv6, sw.mgr_mac)
+            #     entry_hdl_map["IngressPipeImpl.ndp_reply_table"].append(
+            #         entry_hdl)
+            entry_hdl = self.writeNdpNsReply(sw, sw.mgr_ipv6, sw.mgr_mac)
+            entry_hdl_map["IngressPipeImpl.ndp_reply_table"].append(
+                entry_hdl)
+
+            # entry_hdl = self.writeSRv6MySidTable(sw, sw.mgr_ipv6)
+            # entry_hdl_map["IngressPipeImpl.srv6_my_sid"].append(entry_hdl)
+
             if str(sw.index) in self.TOR_LIST.keys():
-                entry_hdl = self.writeNdpReply(sw,
-                                               self.TOR_LIST[str(sw.index)],
-                                               sw.mgr_mac)
+                host_ipv6 = getHostIpv6FromIndex(sw.index)
+                host_mac = getHostMacFromIndex(sw.index)
+                print("localhost_ipv6 = %s, hlocalost_mac = %s" %
+                      (host_ipv6, host_mac))
+                entry_hdl = self.writeNdpNsReply(sw, host_ipv6, host_mac)
                 entry_hdl_map["IngressPipeImpl.ndp_reply_table"].append(
                     entry_hdl)
 
-            entry_hdl = self.writeNdpReply(sw, sw.mgr_ipv6, sw.mgr_mac)
-            entry_hdl_map["IngressPipeImpl.ndp_reply_table"].append(entry_hdl)
+                entry_hdl = self.writeL2ExactTable(sw, host_mac, TIN_PORTNUM)
+                entry_hdl_map["IngressPipeImpl.l2_exact_table"].append(
+                    entry_hdl)
 
-            entry_hdl = self.writeSRv6MySidTable(sw, sw.mgr_ipv6)
-            entry_hdl_map["IngressPipeImpl.srv6_my_sid"].append(entry_hdl)
+                group_hdl = self.createHostEcmpGroup(
+                    sw, self.TOR_LIST.get(str(sw.index))[1])
+                entry_hdl = self.writeEcmpHostRoutingTable(
+                    sw, self.TOR_LIST.get(str(sw.index))[0],
+                    group_hdl)
+                entry_hdl_map[
+                    "IngressPipeImpl.ecmp_routing_v6_table"].append(
+                        entry_hdl)
 
             upstream_ecmp_group = []
             downstream_ecmp_group = []
@@ -386,15 +475,15 @@ class Controller():
                 next_hop_port = sw.next_hop[port]
                 neighbor = getSwitchInstanceFromPort(self.SWITCH_LIST,
                                                      next_hop_port)
-                entry_hdl = self.writeL2ExactTable(
-                    sw, neighbor.mgr_mac,
-                    int(port.split("eth")[1]))
+                entry_hdl = self.writeL2ExactTable(sw, neighbor.mgr_mac,
+                                                   port.split("eth")[1])
                 entry_hdl_map["IngressPipeImpl.l2_exact_table"].append(
                     entry_hdl)
+
                 # set ecmp group
                 if str(neighbor.index) in self.TOR_LIST.keys():
                     entry_hdl = self.writeDirectRoutingIpv6Table(
-                        sw, self.TOR_LIST.get(str(neighbor.index)),
+                        sw, self.TOR_LIST.get(str(neighbor.index))[0],
                         neighbor.mgr_mac)
                     entry_hdl_map[
                         "IngressPipeImpl.direct_routing_v6_table"].append(
@@ -506,14 +595,15 @@ def nexthopToNeighbors(switch):
 
 def getHostIpv6FromIndex(index):
     mgr_ipv6 = getIpv6ByPortName(str("s" + str(index) + "-mgr"))
+    print(mgr_ipv6)
     trf_ipv6 = mgr_ipv6.rsplit(":", 1)[0] + ":101"
     return trf_ipv6
 
 
 def getHostMacFromIndex(index):
     # host: 10:00:11:11:00:12 -> sw: 10:00:11:11:00:11
-    tin_mac = getMacByPortName(str("s" + str(index) + "-tin"))
-    trf_mac = tin_mac.rsplit(":", 1)[0] + ":12"
+    mgr_mac = getMacByPortName(str("s" + str(index) + "-mgr"))
+    trf_mac = mgr_mac.rsplit(":", 1)[0] + ":12"
     return trf_mac
 
 

@@ -1,4 +1,8 @@
-with_host:s0,s1,s2
-no_host:
+with_host:s0,s2
+no_host:s1
+layer_number:3
+layer0:s0
+layer1:s1
+layer2:s2
 s0:0-s1:0
 s1:1-s2:0

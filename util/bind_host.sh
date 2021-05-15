@@ -21,12 +21,13 @@ if ! ip link show $intf0 &> /dev/null; then
     ip netns exec ns$num ip -6 route add 2001::$num:202/128 dev $intf0
     ip netns exec ns$num ip -6 route add default dev $intf0 via 2001::$num:202
 
-    # TOE_OPTIONS="rx tx sg tso gso gro lro rxvlan txvlan rxhash"
-    # for TOE_OPTION in $TOE_OPTIONS; do
-    #     ip netns exec ns$num /sbin/ethtool --offload $intf0 "$TOE_OPTION" off &> /dev/null
-    #     /sbin/ethtool --offload $intf1 "$TOE_OPTION" off &> /dev/null
-    # done
+    TOE_OPTIONS="rx tx sg tso gso gro lro rxvlan txvlan rxhash"
+    for TOE_OPTION in $TOE_OPTIONS; do
+        ip netns exec ns$num /sbin/ethtool --offload $intf0 "$TOE_OPTION" off &> /dev/null
+        /sbin/ethtool --offload $intf1 "$TOE_OPTION" off &> /dev/null
+    done
 fi
 sysctl net.ipv6.conf.$intf1.disable_ipv6=0 &> /dev/null
-# sysctl net.ipv6.conf.all.forwarding=1 &> /dev/null
-# ip netns exec ns$num sysctl net.ipv6.conf.$intf0.disable_ipv6=0 &> /dev/null
+echo 1530 > /sys/class/net/$intf1/mtu
+ip netns exec ns$num sysctl net.ipv6.conf.$intf0.disable_ipv6=0 &> /dev/null
+# ip netns exec ns$num echo 1530 > /sys/class/net/$intf0/mtu

@@ -82,8 +82,8 @@ for s in sws:
     setup_gw("%s" % (s, ), switch_mgr)
 
 for s in tors:
-    bind_host("s%s-trf" % (s, ), "s%s-tin" % (s, ),
-              "%s" % (s, ))  # connect to host, port 10
+    bind_host("s%s-trf" % (s), "s%s-tin" % (s),
+              "%s" % (s))  # connect to host, port 10
 for t in topo:
     s1 = t[:-1].split("-")[0]
     s2 = t[:-1].split("-")[1]
@@ -110,7 +110,8 @@ for i in sws:
     if args.console_log:
         switch_args += "--log-console "
     # switch_args += "--pre SimplePreLAG "
-    # switch_args += "--nanolog ipv:///tmp/bm-log.ipc "
+    if len(switch_args_list) == len(sws) - 1:
+        switch_args += "--nanolog ipc:///tmp/bm-log.ipc "
     switch_args += P4_JSON
     switch_args_list.append(switch_args)
 # print(switch_args_list)

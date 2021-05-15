@@ -33,8 +33,8 @@ bash clean_demo.sh
 2. Check interfaces  `ifconfig`
 3. Ping some host with IPv6 address: `ping6 2001::33:101`
 4. Use iperf test UDP: 
-    - In Server: `iperf –s -u –p 521 –i 1 -V`
-    - In Client: `iperf -c 2001::33:101 -u -p 521 -i 1 -t 10 -V`
+    - In Server: `iperf –s -u –i 1 -V`
+    - In Client: `iperf -c 2001::33:101 -u README.mdREADME.md-i 1 -t 10 -V`
 ## Frequently-used Link/File:
 - [runtime_CLI.py](https://github.com/p4lang/behavioral-model/blob/27c235944492ef55ba061fcf658b4d8102d53bd8/tools/runtime_CLI.py)
 - [runtime_CLI.md](https://github.com/p4lang/behavioral-model/blob/27c235944492ef55ba061fcf658b4d8102d53bd8/docs/runtime_CLI.md)

@@ -1,0 +1,10 @@
+with_host:s0,s3
+no_host:s1,s2
+layer_number:3
+layer0:s0
+layer1:s1,s2
+layer2:s3
+s0:0-s1:0
+s0:1-s2:0
+s3:0-s1:1
+s3:1-s2:1
