@@ -17,3 +17,4 @@ util/.pipe_cfg
 include/__pycache__
 p4src/*.p4i
 p4src/*.json
+.DS_Store
