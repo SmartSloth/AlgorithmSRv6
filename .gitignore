@@ -18,3 +18,8 @@ include/__pycache__
 p4src/*.p4i
 p4src/*.json
 .//docs/.DS_Store
+.//docs/*.aux
+.//docs/*.bbl
+.//docs/*.blg
+.//docs/*.log
+.//docs/*.synctex.gz

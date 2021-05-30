@@ -17,7 +17,6 @@ if ! ip link show $intf0 &> /dev/null; then
     # ip -6 addr add 2001::$num:202 dev $intf1
     ip -6 route add 2001::$num:101/128 dev $intf1
 
-    # ip netns exec ns$num ip route add default via 10.0.$num.2
     ip netns exec ns$num ip -6 route add 2001::$num:202/128 dev $intf0
     ip netns exec ns$num ip -6 route add default dev $intf0 via 2001::$num:202
 

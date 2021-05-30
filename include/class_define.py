@@ -1,11 +1,6 @@
 #! python3
 
-import os
-import re
 import sys
-import math
-import time
-import threading
 import netifaces
 import numpy as np
 
@@ -107,27 +102,38 @@ class SWITCH():
             thrift_ip, thrift_port,
             [("simple_pre_lag", SimplePreLAG.Client)])[0]
         self.mgr_port = "s" + str(int(thrift_port) - 9000) + "-mgr"
-        self.mgr_ipv6 = netifaces.ifaddresses(
-            self.mgr_port)[netifaces.AF_INET6][0]['addr'].split("%")[0]
+        try:
+            self.mgr_ipv6 = netifaces.ifaddresses(
+                self.mgr_port)[netifaces.AF_INET6][0]['addr'].split("%")[0]
+        except KeyError:
+            self.mgr_ipv6 = None
+        try:
+            self.mgr_ipv4 = netifaces.ifaddresses(
+                self.mgr_port)[netifaces.AF_INET][0]['addr']
+        except KeyError:
+            self.mgr_ipv4 = None
         self.mgr_mac = netifaces.ifaddresses(
             self.mgr_port)[netifaces.AF_LINK][0]['addr']
         self.name = self.mgr_port.split("-")[0]
         self.port_ipv6 = {}
+        self.port_ipv4 = {}
         self.next_hop = {}
         self.neighbors = None
         self.index = int(self.name.split("s")[1])
         self.host_ipv6 = None
+        self.host_ipv4 = None
 
     def _description(self):
         str = "Switch %s description:\nManager_port = %s\n \
             Manager_ipv6 = %s\nManager_mac = %s\nPorts = %s\n \
-            Next_hop = %s\nHost_ipv6 = %s" % (
+            Next_hop = %s\nHost_ipv6 = %s"                                           % (
             self.name, self.mgr_port, self.mgr_ipv6, self.mgr_mac,
             self.port_ipv6, self.next_hop, self.host_ipv6)
         print(str)
 
-    def _port_map(self, port, port_ipv6, next_hop):
+    def _port_map(self, port, port_ipv6, port_ipv4, next_hop):
         self.port_ipv6[port] = port_ipv6
+        self.port_ipv4[port] = port_ipv4
         self.next_hop[port] = next_hop
         # tmp = []
         # for port in next_hop:
@@ -258,13 +264,12 @@ class SWITCH():
             0, action_profile_name, mbr_handle, grp_handle)
         return message
 
-    def add_entry_to_group(self, table_name, match_key, match_key_types,
-                           grp_handle):
+    def add_exact_entry_to_group(self, table_name, match_key, match_key_types,
+                                 grp_handle):
         entry_handle = self.client.bm_mt_indirect_ws_add_entry(
             0,
             table_name=table_name,
-            match_key=runtimedata.parse_lpm_match_key(match_key,
-                                                      match_key_types),
+            match_key=runtimedata.parse_match_key(match_key, match_key_types),
             grp_handle=grp_handle,
             options=BmAddEntryOptions(priority=0))
         return entry_handle

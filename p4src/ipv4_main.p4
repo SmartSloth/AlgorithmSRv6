@@ -32,9 +32,9 @@
 // CPU_PORT.
 #define CPU_CLONE_SESSION_ID 99
 
-// Maximum number of hops supported when using SRv6.
+// Maximum number of hops supported when using SRv4.
 // Required for Exercise 7.
-#define SRV6_MAX_HOPS 4
+#define SRV4_MAX_HOPS 4
 #define MAX_PORTS 16
 // v1model: https://github.com/p4lang/p4c/blob/master/p4include/v1model.p4
 
@@ -42,29 +42,16 @@ typedef bit<9>   port_num_t;
 typedef bit<48>  mac_addr_t;
 typedef bit<16>  mcast_group_id_t;
 typedef bit<32>  ipv4_addr_t;
-typedef bit<128> ipv6_addr_t;
 typedef bit<16>  l4_port_t;
 typedef bit<48>  time_t;
+typedef bit<8>   srv4_sid_t;
 
 const bit<16> ETHERTYPE_IPV4 = 0x0800;
-const bit<16> ETHERTYPE_IPV6 = 0x86dd;
+const bit<16> ETHERTYPE_SRV4 = 0x2501;
 
 const bit<8> IP_PROTO_ICMP   = 1;
 const bit<8> IP_PROTO_TCP    = 6;
 const bit<8> IP_PROTO_UDP    = 17;
-const bit<8> IP_PROTO_SRV6   = 43;
-const bit<8> IP_PROTO_ICMPV6 = 58;
-
-const mac_addr_t IPV6_MCAST_01   = 0x33_33_00_00_00_01;
-const ipv6_addr_t IPV6_ALL_NODE   = 0xFF_02_00_00_00_00_00_00_00_00_00_00_00_00_00_01;
-const ipv6_addr_t IPV6_ALL_ROUTER = 0xFF_02_00_00_00_00_00_00_00_00_00_00_00_00_00_02;
-
-const bit<8> ICMP6_ECHO_REQUEST = 128;
-const bit<8> ICMP6_ECHO_REPLY = 129;
-const bit<8> ICMP6_TYPE_NS = 135;
-const bit<8> ICMP6_TYPE_NA = 136;
-const bit<8> ICMP6_TYPE_RS = 133;
-const bit<8> ICMP6_TYPE_RA = 134;
 
 const bit<8> NDP_OPT_TARGET_LL_ADDR = 2;
 
@@ -99,29 +86,13 @@ header ipv4_t {
     bit<32>  dst_addr;
 }
 
-header ipv6_t {
-    bit<4>    version;
-    bit<8>    traffic_class;
-    bit<20>   flow_label;
-    bit<16>   payload_len;
-    bit<8>    next_hdr;
-    bit<8>    hop_limit;
-    bit<128>  src_addr;
-    bit<128>  dst_addr;
-}
-
-header srv6h_t {
-    bit<8>   next_hdr;
-    bit<8>   hdr_ext_len;
-    bit<8>   routing_type;
-    bit<8>   segment_left;
+header srv4h_t {
     bit<8>   last_entry;
-    bit<8>   flags;
-    bit<16>  tag;
+    bit<8>   segment_left;
 }
 
-header srv6_list_t {
-    bit<128>  segment_id;
+header srv4_list_t {
+    srv4_sid_t  segment_id;
 }
 
 header tcp_t {
@@ -154,21 +125,6 @@ header icmp_t {
     bit<64>  timestamp;
 }
 
-header icmpv6_t {
-    bit<8>   type;
-    bit<8>   code;
-    bit<16>  checksum;
-}
-
-header ndp_t {
-    bit<32>      flags;
-    ipv6_addr_t  target_ipv6_addr;
-    // NDP option.
-    bit<8>       type;
-    bit<8>       length;
-    bit<48>      target_mac_addr;
-}
-
 // Packet-in header. Prepended to packets sent to the CPU_PORT and used by the
 // P4Runtime server (Stratum) to populate the PacketIn message metadata fields.
 // Here we use it to carry the original ingress port where the packet was
@@ -193,22 +149,20 @@ struct parsed_headers_t {
     cpu_out_header_t cpu_out;
     cpu_in_header_t cpu_in;
     ethernet_t ethernet;
+    srv4h_t srv4h;
+    srv4_list_t[SRV4_MAX_HOPS] srv4_list;
     ipv4_t ipv4;
-    ipv6_t ipv6;
-    srv6h_t srv6h;
-    srv6_list_t[SRV6_MAX_HOPS] srv6_list;
     tcp_t tcp;
     udp_t udp;
     icmp_t icmp;
-    icmpv6_t icmpv6;
-    ndp_t ndp;
 }
 
 struct local_metadata_t {
     l4_port_t   l4_src_port;
     l4_port_t   l4_dst_port;
     bool        is_multicast;
-    ipv6_addr_t next_srv6_sid;
+    bool        is_srv4;
+    srv4_sid_t  next_srv4_sid;
     bit<8>      ip_proto;
     bit<8>      icmp_type;
 }
@@ -239,8 +193,36 @@ parser ParserImpl (packet_in packet,
         packet.extract(hdr.ethernet);
         transition select(hdr.ethernet.ether_type){
             ETHERTYPE_IPV4: parse_ipv4;
-            ETHERTYPE_IPV6: parse_ipv6;
+            ETHERTYPE_SRV4: parse_srv4h;
             default: accept;
+        }
+    }
+
+    state parse_srv4h {
+        local_metadata.is_srv4 = true;
+        packet.extract(hdr.srv4h);
+        transition parse_srv4_list;
+    }
+
+    state parse_srv4_list {
+        packet.extract(hdr.srv4_list.next);
+        bool next_segment = (bit<32>)hdr.srv4h.segment_left - 1 == (bit<32>)hdr.srv4_list.lastIndex;
+        transition select(next_segment) {
+            true: mark_current_srv4;
+            default: parse_srv4_list;
+        }
+    }
+
+    state mark_current_srv4 {
+        local_metadata.next_srv4_sid = hdr.srv4_list.last.segment_id;
+        transition check_last_srv4;
+    }
+
+    state check_last_srv4 {
+        bool last_segment = (bit<32>)hdr.srv4h.last_entry == (bit<32>)hdr.srv4_list.lastIndex;
+        transition select(last_segment) {
+           true: parse_ipv4;
+           false: parse_srv4_list;
         }
     }
 
@@ -251,18 +233,6 @@ parser ParserImpl (packet_in packet,
             IP_PROTO_TCP: parse_tcp;
             IP_PROTO_UDP: parse_udp;
             IP_PROTO_ICMP: parse_icmp;
-            default: accept;
-        }
-    }
-
-    state parse_ipv6 {
-        packet.extract(hdr.ipv6);
-        local_metadata.ip_proto = hdr.ipv6.next_hdr;
-        transition select(hdr.ipv6.next_hdr) {
-            IP_PROTO_TCP: parse_tcp;
-            IP_PROTO_UDP: parse_udp;
-            IP_PROTO_ICMPV6: parse_icmpv6;
-            IP_PROTO_SRV6: parse_srv6;
             default: accept;
         }
     }
@@ -285,61 +255,6 @@ parser ParserImpl (packet_in packet,
         packet.extract(hdr.icmp);
         local_metadata.icmp_type = hdr.icmp.type;
         transition accept;
-    }
-
-    state parse_icmpv6 {
-        packet.extract(hdr.icmpv6);
-        local_metadata.icmp_type = hdr.icmpv6.type;
-        transition select(hdr.icmpv6.type) {
-            ICMP6_TYPE_NS: parse_ndp;
-            ICMP6_TYPE_NA: parse_ndp;
-            ICMP6_TYPE_RS: parse_ndp;
-            ICMP6_TYPE_RA: parse_ndp;
-            default: accept;
-        }
-    }
-
-    state parse_ndp {
-        packet.extract(hdr.ndp);
-        transition accept;
-    }
-
-    state parse_srv6 {
-        packet.extract(hdr.srv6h);
-        transition parse_srv6_list;
-    }
-
-    state parse_srv6_list {
-        packet.extract(hdr.srv6_list.next);
-        bool next_segment = (bit<32>)hdr.srv6h.segment_left - 1 == (bit<32>)hdr.srv6_list.lastIndex;
-        transition select(next_segment) {
-            true: mark_current_srv6;
-            default: check_last_srv6;
-        }
-    }
-
-    state mark_current_srv6 {
-        local_metadata.next_srv6_sid = hdr.srv6_list.last.segment_id;
-        transition check_last_srv6;
-    }
-
-    state check_last_srv6 {
-        // working with bit<8> and int<32> which cannot be cast directly; using
-        // bit<32> as common intermediate type for comparision
-        bool last_segment = (bit<32>)hdr.srv6h.last_entry == (bit<32>)hdr.srv6_list.lastIndex;
-        transition select(last_segment) {
-           true: parse_srv6_next_hdr;
-           false: parse_srv6_list;
-        }
-    }
-
-    state parse_srv6_next_hdr {
-        transition select(hdr.srv6h.next_hdr) {
-            IP_PROTO_TCP: parse_tcp;
-            IP_PROTO_UDP: parse_udp;
-            IP_PROTO_ICMPV6: parse_icmpv6;
-            default: accept;
-        }
     }
 }
 
@@ -375,76 +290,7 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
             @defaultonly drop;
         }
         const default_action = drop;
-        // The @name annotation is used here to provide a name to this table
-        // counter, as it will be needed by the compiler to generate the
-        // corresponding P4Info entity.
         @name("l2_exact_table_counter")
-        counters = direct_counter(CounterType.packets_and_bytes);
-    }
-
-    // --- l2_ternary_table (for broadcast/multicast entries) ------------------
-
-    action set_multicast_group(mcast_group_id_t gid) {
-        // gid will be used by the Packet Replication Engine (PRE) in the
-        // Traffic Manager--located right after the ingress pipeline, to
-        // replicate a packet to multiple egress ports, specified by the control
-        // plane by means of P4Runtime MulticastGroupEntry messages.
-        standard_metadata.mcast_grp = gid;
-        local_metadata.is_multicast = true;
-    }
-
-    table l2_ternary_table {
-        key = {
-            hdr.ethernet.dst_addr: ternary;
-        }
-        actions = {
-            set_multicast_group;
-            @defaultonly drop;
-        }
-        const default_action = drop;
-        @name("l2_ternary_table_counter")
-        counters = direct_counter(CounterType.packets_and_bytes);
-    }
-
-    action ndp_ns_to_na(mac_addr_t target_mac) {
-        hdr.ethernet.src_addr = target_mac;
-        hdr.ethernet.dst_addr = IPV6_MCAST_01;
-        ipv6_addr_t host_ipv6_tmp = hdr.ipv6.src_addr;
-        hdr.ipv6.src_addr = hdr.ndp.target_ipv6_addr;
-        hdr.ipv6.dst_addr = host_ipv6_tmp;
-        hdr.ipv6.next_hdr = IP_PROTO_ICMPV6;
-        hdr.icmpv6.type = ICMP6_TYPE_NA;
-        hdr.ndp.flags = NDP_FLAG_ROUTER | NDP_FLAG_OVERRIDE;
-        hdr.ndp.type = NDP_OPT_TARGET_LL_ADDR;
-        hdr.ndp.length = 1;
-        hdr.ndp.target_mac_addr = target_mac;
-        standard_metadata.egress_spec = standard_metadata.ingress_port;
-    }
-
-    action ndp_rs_to_ra(mac_addr_t target_mac) {
-        hdr.ethernet.src_addr = target_mac;
-        hdr.ethernet.dst_addr = IPV6_MCAST_01;
-        ipv6_addr_t host_ipv6_tmp = hdr.ipv6.src_addr;
-        hdr.ipv6.src_addr = hdr.ndp.target_ipv6_addr;
-        hdr.ipv6.dst_addr = IPV6_ALL_NODE;
-        hdr.ipv6.next_hdr = IP_PROTO_ICMPV6;
-        hdr.icmpv6.type = ICMP6_TYPE_RA;
-        // hdr.ndp.flags = NDP_FLAG_ROUTER | NDP_FLAG_OVERRIDE;
-        // hdr.ndp.type = NDP_OPT_TARGET_LL_ADDR;
-        hdr.ndp.length = 1;
-        hdr.ndp.target_mac_addr = target_mac;
-        standard_metadata.egress_spec = standard_metadata.ingress_port;
-    }
-
-    table ndp_reply_table {
-        key = {
-            hdr.ndp.target_ipv6_addr: exact;
-        }
-        actions = {
-            ndp_ns_to_na;
-            ndp_rs_to_ra;
-        }
-        @name("ndp_reply_table_counter")
         counters = direct_counter(CounterType.packets_and_bytes);
     }
 
@@ -459,7 +305,7 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
         counters = direct_counter(CounterType.packets_and_bytes);
     }
 
-    // --- routing_v6_table ----------------------------------------------------
+    // --- routing_v4_table ----------------------------------------------------
 
     action_selector(HashAlgorithm.crc16, 32w1024, 32w16) ecmp_selector;
 
@@ -467,18 +313,16 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
         hdr.ethernet.src_addr = hdr.ethernet.dst_addr;
         hdr.ethernet.dst_addr = dmac;
         // Decrement TTL
-        hdr.ipv6.hop_limit = hdr.ipv6.hop_limit - 1;
+        hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
     }
-    table ecmp_routing_v6_table {
+    table ecmp_routing_v4_table {
       key = {
-          hdr.ipv6.dst_addr:          exact;
+          hdr.ipv4.dst_addr:          exact;
           // The following fields are not used for matching, but as input to the
           // ecmp_selector hash function.
-          hdr.ipv6.dst_addr:          selector;
-          hdr.ipv6.src_addr:          selector;
-          hdr.ipv6.flow_label:        selector;
-          // The rest of the 5-tuple is optional per RFC6438
-          hdr.ipv6.next_hdr:          selector;
+          hdr.ipv4.dst_addr:          selector;
+          hdr.ipv4.src_addr:          selector;
+          hdr.ipv4.protocol:          selector;
           local_metadata.l4_src_port: selector;
           local_metadata.l4_dst_port: selector;
       }
@@ -486,105 +330,80 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
           set_next_hop;
       }
       implementation = ecmp_selector;
-      @name("ecmp_routing_v6_table_counter")
+      @name("ecmp_routing_v4_table_counter")
       counters = direct_counter(CounterType.packets_and_bytes);
     }
 
-    table direct_routing_v6_table {
+    table direct_routing_v4_table {
       key = {
-          hdr.ipv6.dst_addr:          exact;
+          hdr.ipv4.dst_addr: exact;
       }
       actions = {
           set_next_hop;
       }
-      @name("direct_routing_v6_table_counter")
+      @name("direct_routing_v4_table_counter")
       counters = direct_counter(CounterType.packets_and_bytes);
     }
 
     // pop at last second point
-    action srv6_end() {
-        hdr.srv6h.segment_left = hdr.srv6h.segment_left - 1;
-        hdr.ipv6.dst_addr = local_metadata.next_srv6_sid;
+    action srv4_end() {
+        hdr.srv4h.segment_left = hdr.srv4h.segment_left - 1;
     }
 
-    direct_counter(CounterType.packets_and_bytes) srv6_my_sid_table_counter;
-    table srv6_my_sid {
+    direct_counter(CounterType.packets_and_bytes) srv4_my_sid_table_counter;
+    table srv4_my_sid {
       key = {
-          hdr.ipv6.dst_addr: exact;
+          hdr.ipv4.dst_addr: exact;
       }
       actions = {
-          srv6_end;
+          srv4_end;
       }
-      counters = srv6_my_sid_table_counter;
+      counters = srv4_my_sid_table_counter;
     }
 
-    action insert_srv6h_header(bit<8> num_segments) {
-        hdr.srv6h.setValid();
-        hdr.srv6h.next_hdr = hdr.ipv6.next_hdr;
-        hdr.srv6h.hdr_ext_len =  num_segments * 2;
-        hdr.srv6h.routing_type = 4;
-        hdr.srv6h.segment_left = num_segments - 1;
-        hdr.srv6h.last_entry = num_segments - 1;
-        hdr.srv6h.flags = 0;
-        hdr.srv6h.tag = 0;
-        hdr.ipv6.next_hdr = IP_PROTO_SRV6;
+    action insert_srv4h_header(bit<8> num_segments) {
+        hdr.srv4h.setValid();
+        hdr.srv4h.segment_left = num_segments - 1;
+        hdr.srv4h.last_entry = num_segments - 1;
     }
 
-    /*
-       Single segment header doesn't make sense given PSP
-       i.e. we will pop the SRv6 header when segments_left reaches 0
-     */
-
-    action srv6_t_insert_2(ipv6_addr_t s1, ipv6_addr_t s2) {
-        hdr.ipv6.dst_addr = s1;
-        hdr.ipv6.payload_len = hdr.ipv6.payload_len + 40;
-        insert_srv6h_header(2);
-        hdr.srv6_list[0].setValid();
-        hdr.srv6_list[0].segment_id = s2;
-        hdr.srv6_list[1].setValid();
-        hdr.srv6_list[1].segment_id = s1;
+    action srv4_t_insert_2(srv4_sid_t sid1, srv4_sid_t sid2) {
+        insert_srv4h_header(2);
+        hdr.srv4_list[0].setValid();
+        hdr.srv4_list[0].segment_id = sid2;
+        hdr.srv4_list[1].setValid();
+        hdr.srv4_list[1].segment_id = sid1;
     }
 
-    action srv6_t_insert_3(ipv6_addr_t s1, ipv6_addr_t s2, ipv6_addr_t s3) {
-        hdr.ipv6.dst_addr = s1;
-        hdr.ipv6.payload_len = hdr.ipv6.payload_len + 56;
-        insert_srv6h_header(3);
-        hdr.srv6_list[0].setValid();
-        hdr.srv6_list[0].segment_id = s3;
-        hdr.srv6_list[1].setValid();
-        hdr.srv6_list[1].segment_id = s2;
-        hdr.srv6_list[2].setValid();
-        hdr.srv6_list[2].segment_id = s1;
+    action srv4_t_insert_3(srv4_sid_t sid1, srv4_sid_t sid2, srv4_sid_t sid3) {
+        insert_srv4h_header(3);
+        hdr.srv4_list[0].setValid();
+        hdr.srv4_list[0].segment_id = sid3;
+        hdr.srv4_list[1].setValid();
+        hdr.srv4_list[1].segment_id = sid2;
+        hdr.srv4_list[2].setValid();
+        hdr.srv4_list[2].segment_id = sid1;
     }
 
-    direct_counter(CounterType.packets_and_bytes) srv6_transit_table_counter;
-    table srv6_transit {
+    direct_counter(CounterType.packets_and_bytes) srv4_transit_table_counter;
+    table srv4_transit {
       key = {
-        hdr.ipv6.dst_addr: exact;
-        // TODO: what other fields do we want to match?
+        hdr.ipv4.dst_addr: exact;
       }
       actions = {
-          srv6_t_insert_2;
-          srv6_t_insert_3;
-          // Extra credit: set a metadata field, then push label stack in egress
+          srv4_t_insert_2;
+          srv4_t_insert_3;
       }
-      counters = srv6_transit_table_counter;
+      counters = srv4_transit_table_counter;
     }
 
     // Called directly in the apply block.
-    action srv6_pop() {
-      hdr.ipv6.next_hdr = hdr.srv6h.next_hdr;
-      // SRv6 header is 8 bytes
-      // SRv6 list entry is 16 bytes each
-      // (((bit<16>)hdr.srv6h.last_entry + 1) * 16) + 8;
-      bit<16> srv6h_size = (((bit<16>)hdr.srv6h.last_entry + 1) << 4) + 8;
-      hdr.ipv6.payload_len = hdr.ipv6.payload_len - srv6h_size;
-
-      hdr.srv6h.setInvalid();
-      // Need to set MAX_HOPS headers invalid
-      hdr.srv6_list[0].setInvalid();
-      hdr.srv6_list[1].setInvalid();
-      hdr.srv6_list[2].setInvalid();
+    action srv4_pop() {
+      hdr.srv4h.setInvalid();
+      // Set MAX_HOPS headers invalid
+      hdr.srv4_list[0].setInvalid();
+      hdr.srv4_list[1].setInvalid();
+      hdr.srv4_list[2].setInvalid();
     }
 
     action send_to_cpu() {
@@ -627,37 +446,25 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
             exit;
         }
 
-        bool do_l3_l2 = true;
-
-        if (hdr.icmpv6.isValid() && hdr.icmpv6.type == ICMP6_TYPE_NS) {
-            if (ndp_reply_table.apply().hit) {
-                do_l3_l2 = false;
-            }
-        }
-
-        if (do_l3_l2) {
-            if (hdr.ipv6.isValid() && rmac.apply().hit) {
-                if (hdr.srv6h.isValid()) {
-                    if (srv6_my_sid.apply().hit) {
-                        // PSP logic -- enabled for all packets
-                        if (hdr.srv6h.segment_left == 0) {
-                            srv6_pop();
-                        }
-                    } else {
-                        srv6_transit.apply();
+        if (hdr.ipv4.isValid() && rmac.apply().hit) {
+            if (hdr.srv4h.isValid()) {
+                if (srv4_my_sid.apply().hit) {
+                    // PSP logic -- enabled for all packets
+                    if (hdr.srv4h.segment_left == 0) {
+                        srv4_pop();
                     }
+                } else {
+                    srv4_transit.apply();
                 }
-                // ecmp_routing_v6_table.apply();
-                if (!ecmp_routing_v6_table.apply().hit) {
-                    direct_routing_v6_table.apply();
-                }
-                if(hdr.ipv6.hop_limit == 0) { drop(); }
             }
-
-            if (!l2_exact_table.apply().hit) {
-                l2_ternary_table.apply();
+            // ecmp_routing_v4_table.apply();
+            if (!ecmp_routing_v4_table.apply().hit) {
+                direct_routing_v4_table.apply();
             }
+            if(hdr.ipv4.ttl == 0) { drop(); }
         }
+
+        l2_exact_table.apply();
         acl_table.apply();
     }
 }
@@ -694,29 +501,7 @@ control EgressPipeImpl (inout parsed_headers_t hdr,
 control ComputeChecksumImpl(inout parsed_headers_t hdr,
                             inout local_metadata_t local_metadata)
 {
-    apply {
-        // The following is used to update the ICMPv6 checksum of NDP
-        // NA packets generated by the ndp reply table in the ingress pipeline.
-        // This function is executed only if the NDP header is present.
-        update_checksum(hdr.ndp.isValid(),
-            {
-                hdr.ipv6.src_addr,
-                hdr.ipv6.dst_addr,
-                hdr.ipv6.payload_len,
-                8w0,
-                hdr.ipv6.next_hdr,
-                hdr.icmpv6.type,
-                hdr.icmpv6.code,
-                hdr.ndp.flags,
-                hdr.ndp.target_ipv6_addr,
-                hdr.ndp.type,
-                hdr.ndp.length,
-                hdr.ndp.target_mac_addr
-            },
-            hdr.icmpv6.checksum,
-            HashAlgorithm.csum16
-        );
-    }
+    apply { }
 }
 
 
@@ -724,15 +509,12 @@ control DeparserImpl(packet_out packet, in parsed_headers_t hdr) {
     apply {
         packet.emit(hdr.cpu_in);
         packet.emit(hdr.ethernet);
+        packet.emit(hdr.srv4h);
+        packet.emit(hdr.srv4_list);
         packet.emit(hdr.ipv4);
-        packet.emit(hdr.ipv6);
-        packet.emit(hdr.srv6h);
-        packet.emit(hdr.srv6_list);
         packet.emit(hdr.tcp);
         packet.emit(hdr.udp);
         packet.emit(hdr.icmp);
-        packet.emit(hdr.icmpv6);
-        packet.emit(hdr.ndp);
     }
 }
 
