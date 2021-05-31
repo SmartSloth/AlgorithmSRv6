@@ -19,10 +19,10 @@ class Controller():
     def __init__(self):
         self.SWITCH_NUM = 0
         self.TOR_LIST = {}  # switch.name:host_ipv6
-        # self.TOPO_FILE = "/int/topo/tree_topo"
+        self.TOPO_FILE = "/int/topo/tree_topo"
         # self.TOPO_FILE = "/int/topo/line_topo"
         # self.TOPO_FILE = "/int/topo/leaf_spine_topo"
-        self.TOPO_FILE = "/int/topo/test_ipv6_topo"
+        # self.TOPO_FILE = "/int/topo/test_ipv6_topo"
         self.GRAPH = nx.Graph()
         self.LAYERS = []
         self.LAYER_NUMBER = 0
@@ -53,7 +53,8 @@ class Controller():
                     ipv4 = None
                     ipv6 = ipv6.split("%")[0]
                 except KeyError:
-                    ipv4 = netifaces.ifaddresses(port)[netifaces.AF_INET][0]['addr']
+                    ipv4 = netifaces.ifaddresses(port)[
+                        netifaces.AF_INET][0]['addr']
                     ipv6 = None
                 sw._port_map(port, ipv6, ipv4,
                              self.LINK_LIST[str(index)][port])
@@ -82,10 +83,7 @@ class Controller():
                     ip = getHostIpv6FromIndex(sw_index)
                 except KeyError:
                     ip = getHostIpv4FromIndex(sw_index)
-                self.TOR_LIST[sw_index] = [
-                    ip,
-                    getHostMacFromIndex(sw_index)
-                ]
+                self.TOR_LIST[sw_index] = [ip, getHostMacFromIndex(sw_index)]
 
         # print(sws)
         nodes = [str("s" + str(i)) for i in sws]
@@ -591,14 +589,16 @@ class Controller():
                 for sw_index in self.TOR_LIST.keys():
                     if str(sw_index) != str(sw.index):
                         host_ipv6 = getHostIpv6FromIndex(str(sw_index))
-                        if int(sw_index) < int(sw.index):
+                        if int(sw_index) < int(
+                                sw.index) and len(downstream_ecmp_group) > 0:
                             entry_hdl = self.writeEcmpHostRoutingIpv6Table(
                                 sw, host_ipv6,
                                 self.DOWNSTREAM_GROUP_HANDLE[sw.name])
                             self.ENTRY_HDL_MAP[
                                 "IngressPipeImpl.ecmp_routing_v6_table"].append(
                                     entry_hdl)
-                        elif int(sw_index) > int(sw.index):
+                        elif int(sw_index) > int(
+                                sw.index) and len(upstream_ecmp_group) > 0:
                             entry_hdl = self.writeEcmpHostRoutingIpv6Table(
                                 sw, host_ipv6,
                                 self.UPSTREAM_GROUP_HANDLE[sw.name])
@@ -759,8 +759,8 @@ class Controller():
     def controllerMain(self):
         print("Controller connecting to switches ...")
         self.deleteAllEntries()
-        # self.insertNormalEntries()
-        self.insertSRv4Entries()
+        self.insertNormalEntries()
+        # self.insertSRv4Entries()
         # for i in range(self.SWITCH_NUM):
         #     print("sw%d is %s" % (i, self.SWITCH_LIST[i]))
         #     self.getDelayRegister(self.SWITCH_LIST[i])

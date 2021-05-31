@@ -1,4 +1,0 @@
-set_queue_depth 512 7
-set_queue_rate 100000 7
-set_queue_depth 512 0
-set_queue_rate 100000 0
