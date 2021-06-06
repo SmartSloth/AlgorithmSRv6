@@ -1,5 +1,5 @@
 ## How to use this work
-if you do not have a image, then build it:
+If you have a image tar, then use `docker load` command to load it. If you do not have a image tar, then build it:
 - Build docker with Dockerfile [Path: .](https://github.com/SmartSloth/AlgorithmSRv6)
 
 **Note: Use this command in a path same as Dockerfile file**
@@ -25,6 +25,11 @@ python run_demo.py topo/tree_topo
 ```
 python controller.py
 ```
+- Use SRv6 Controller to add entries [Path: /AlgorithmSRv6](https://github.com/SmartSloth/AlgorithmSRv6):
+```
+python srv6_controller.py
+```
+**There are some useful args you can use in srv6_controller.py, see details in the code file.**
 - Clean everything [Path: /AlgorithmSRv6](https://github.com/SmartSloth/AlgorithmSRv6):
 ```
 bash clean_demo.sh
