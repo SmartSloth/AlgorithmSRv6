@@ -1,4 +1,5 @@
 ## How to use this work
+if you do not have a image, then build it:
 - Build docker with Dockerfile [Path: .](https://github.com/SmartSloth/AlgorithmSRv6)
 
 **Note: Use this command in a path same as Dockerfile file**
