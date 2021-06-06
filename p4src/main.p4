@@ -384,27 +384,27 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
 
     // --- l2_ternary_table (for broadcast/multicast entries) ------------------
 
-    action set_multicast_group(mcast_group_id_t gid) {
-        // gid will be used by the Packet Replication Engine (PRE) in the
-        // Traffic Manager--located right after the ingress pipeline, to
-        // replicate a packet to multiple egress ports, specified by the control
-        // plane by means of P4Runtime MulticastGroupEntry messages.
-        standard_metadata.mcast_grp = gid;
-        local_metadata.is_multicast = true;
-    }
+    // action set_multicast_group(mcast_group_id_t gid) {
+    //     // gid will be used by the Packet Replication Engine (PRE) in the
+    //     // Traffic Manager--located right after the ingress pipeline, to
+    //     // replicate a packet to multiple egress ports, specified by the control
+    //     // plane by means of P4Runtime MulticastGroupEntry messages.
+    //     standard_metadata.mcast_grp = gid;
+    //     local_metadata.is_multicast = true;
+    // }
 
-    table l2_ternary_table {
-        key = {
-            hdr.ethernet.dst_addr: ternary;
-        }
-        actions = {
-            set_multicast_group;
-            @defaultonly drop;
-        }
-        const default_action = drop;
-        @name("l2_ternary_table_counter")
-        counters = direct_counter(CounterType.packets_and_bytes);
-    }
+    // table l2_ternary_table {
+    //     key = {
+    //         hdr.ethernet.dst_addr: ternary;
+    //     }
+    //     actions = {
+    //         set_multicast_group;
+    //         @defaultonly drop;
+    //     }
+    //     const default_action = drop;
+    //     @name("l2_ternary_table_counter")
+    //     counters = direct_counter(CounterType.packets_and_bytes);
+    // }
 
     action ndp_ns_to_na(mac_addr_t target_mac) {
         hdr.ethernet.src_addr = target_mac;
@@ -601,14 +601,14 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
 
     table acl_table {
         key = {
-            standard_metadata.ingress_port: ternary;
-            hdr.ethernet.dst_addr:          ternary;
-            hdr.ethernet.src_addr:          ternary;
-            hdr.ethernet.ether_type:        ternary;
-            local_metadata.ip_proto:        ternary;
-            local_metadata.icmp_type:       ternary;
-            local_metadata.l4_src_port:     ternary;
-            local_metadata.l4_dst_port:     ternary;
+            standard_metadata.ingress_port: exact;
+            hdr.ethernet.dst_addr:          exact;
+            hdr.ethernet.src_addr:          exact;
+            hdr.ethernet.ether_type:        exact;
+            local_metadata.ip_proto:        exact;
+            local_metadata.icmp_type:       exact;
+            local_metadata.l4_src_port:     exact;
+            local_metadata.l4_dst_port:     exact;
         }
         actions = {
             send_to_cpu;
@@ -653,10 +653,10 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
                 }
                 if(hdr.ipv6.hop_limit == 0) { drop(); }
             }
-
-            if (!l2_exact_table.apply().hit) {
-                l2_ternary_table.apply();
-            }
+            l2_exact_table.apply();
+            // if (!l2_exact_table.apply().hit) {
+            //     l2_ternary_table.apply();
+            // }
         }
         acl_table.apply();
     }

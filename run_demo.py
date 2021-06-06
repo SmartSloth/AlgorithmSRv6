@@ -40,7 +40,7 @@ def setup_gw(ip_type, num, veth_port):
 
 MGR_PORTNUM = "15"
 TIN_PORTNUM = "7"
-BMV2_PATH = "/behavioral-model/"
+BMV2_PATH = "/behavioral-model-debug/"
 SWITCH_PATH = "/usr/local/bin/simple_switch "
 # simple_switch target uses the SimplePreLAG engine
 CLI_PATH = BMV2_PATH + "targets/simple_switch/sswitch_CLI "

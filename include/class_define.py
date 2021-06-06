@@ -126,7 +126,7 @@ class SWITCH():
     def _description(self):
         str = "Switch %s description:\nManager_port = %s\n \
             Manager_ipv6 = %s\nManager_mac = %s\nPorts = %s\n \
-            Next_hop = %s\nHost_ipv6 = %s"                                           % (
+            Next_hop = %s\nHost_ipv6 = %s" % (
             self.name, self.mgr_port, self.mgr_ipv6, self.mgr_mac,
             self.port_ipv6, self.next_hop, self.host_ipv6)
         print(str)
@@ -273,6 +273,9 @@ class SWITCH():
             grp_handle=grp_handle,
             options=BmAddEntryOptions(priority=0))
         return entry_handle
+
+    def clear_table(self, table_name):
+        self.client.bm_mt_clear_entries(0, table_name, False)
 
     def ports_to_port_map_str(self, ports, description="port"):
         last_port_num = 0

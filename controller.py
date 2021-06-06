@@ -1,6 +1,8 @@
 #! python3
 
 import os
+import sys
+# import MySQLdb
 import traceback
 import netifaces
 import networkx as nx
@@ -13,6 +15,9 @@ MGR_PORTNUM = 15
 TIN_PORTNUM = 7
 DEFAULT_BROADCAST_GROUP_ID = 1
 DEFAULT_HOST_ECMP_GROUP = 5
+MAX_PORT_NUM = 8
+MAX_INT = 2**32-1
+TRANSMIT_NODES_FILE = "/int/transmit_node.txt"
 
 
 class Controller():
@@ -34,6 +39,7 @@ class Controller():
         self.UPSTREAM_MEMBER_HANDLE = {}
         self.MC_GROUP_HANDLE = {}
         self.ENTRY_HDL_MAP = None
+        self.TRANSMIT_NODE_DELAY = {}  # Switch Instance
 
     def switchConnect(self):
         # try:
@@ -379,7 +385,7 @@ class Controller():
             self.DOWNSTREAM_GROUP_HANDLE[str(
                 switch.name)] = downstream_grp_handle
             print("Create ecmp_selector group on %s successfully: downstream \
-                    group is %s" % (switch.name, downstream_grp_handle))
+                    group is %s"                                                                                                 % (switch.name, downstream_grp_handle))
             # add downstream switches to member
             for i in range(len(downstreamGroupSwitches)):
                 info = switch.act_prof_add_member(
@@ -476,20 +482,6 @@ class Controller():
 
             entry_hdl = self.writeL2ExactTable(sw, sw.mgr_mac, MGR_PORTNUM)
             self.ENTRY_HDL_MAP["IngressPipeImpl.l2_exact_table"].append(
-                entry_hdl)
-
-            mgrp_hdl, l1_hdl, message = self.createL2MulticastGroup(
-                sw, DEFAULT_BROADCAST_GROUP_ID, str(TIN_PORTNUM))
-            self.MC_GROUP_HANDLE[sw.name] = [mgrp_hdl, l1_hdl, message]
-
-            entry_hdl = self.writeL2TernaryTable(sw, "ff:ff:ff:ff:ff:ff",
-                                                 "ff:ff:ff:ff:ff:ff", mgrp_hdl)
-            self.ENTRY_HDL_MAP["IngressPipeImpl.l2_ternary_table"].append(
-                entry_hdl)
-
-            entry_hdl = self.writeL2TernaryTable(sw, "33:33:00:00:00:00",
-                                                 "ff:ff:00:00:00:00", mgrp_hdl)
-            self.ENTRY_HDL_MAP["IngressPipeImpl.l2_ternary_table"].append(
                 entry_hdl)
 
             entry_hdl = self.writeNdpNsReply(sw, sw.mgr_ipv6, sw.mgr_mac)
@@ -616,161 +608,74 @@ class Controller():
             # self.deleteEntries(sw)
             # self.deleteGroups(sw)
 
-    def insertSRv4Entries(self):
-        for sw in self.SWITCH_LIST:
-            print("*" * 40)
-            self.ENTRY_HDL_MAP = {
-                "IngressPipeImpl.rmac": [],
-                "IngressPipeImpl.srv4_my_sid": [],
-                "IngressPipeImpl.srv4_transit": [],
-                "IngressPipeImpl.l2_exact_table": [],
-                "IngressPipeImpl.ecmp_routing_v4_table": [],
-                "IngressPipeImpl.direct_routing_v4_table": []
-            }
-            entry_hdl = self.writeRmacTable(sw, sw.mgr_mac)
-            self.ENTRY_HDL_MAP["IngressPipeImpl.rmac"].append(entry_hdl)
-
-            entry_hdl = self.writeL2ExactTable(sw, sw.mgr_mac, MGR_PORTNUM)
-            self.ENTRY_HDL_MAP["IngressPipeImpl.l2_exact_table"].append(
-                entry_hdl)
-
-            if str(sw.index) in self.TOR_LIST.keys():
-                host_ipv4 = getHostIpv4FromIndex(sw.index)
-                host_mac = getHostMacFromIndex(sw.index)
-                print("localhost_ipv4 = %s, localost_mac = %s" %
-                      (host_ipv4, host_mac))
-                entry_hdl = self.writeL2ExactTable(sw, host_mac, TIN_PORTNUM)
-                self.ENTRY_HDL_MAP["IngressPipeImpl.l2_exact_table"].append(
-                    entry_hdl)
-
-                group_hdl = self.createHostEcmpGroup(
-                    sw,
-                    self.TOR_LIST.get(str(sw.index))[1])
-                entry_hdl = self.writeEcmpHostRoutingIpv4Table(
-                    sw,
-                    self.TOR_LIST.get(str(sw.index))[0], group_hdl)
-                self.ENTRY_HDL_MAP[
-                    "IngressPipeImpl.ecmp_routing_v4_table"].append(entry_hdl)
-
-            upstream_ecmp_group = []
-            downstream_ecmp_group = []
-            print("%s nexthop has: %s" % (sw.name, sw.next_hop))
-            for port in sw.next_hop.keys():
-                next_hop_port = sw.next_hop[port]
-                neighbor = getSwitchInstanceFromPort(self.SWITCH_LIST,
-                                                     next_hop_port)
-                entry_hdl = self.writeL2ExactTable(sw, neighbor.mgr_mac,
-                                                   port.split("eth")[1])
-                self.ENTRY_HDL_MAP["IngressPipeImpl.l2_exact_table"].append(
-                    entry_hdl)
-
-                # set ecmp group
-                if str(neighbor.index) in self.TOR_LIST.keys():
-                    entry_hdl = self.writeDirectRoutingIpv4Table(
-                        sw,
-                        self.TOR_LIST.get(str(neighbor.index))[0],
-                        neighbor.mgr_mac)
-                    self.ENTRY_HDL_MAP[
-                        "IngressPipeImpl.direct_routing_v4_table"].append(
-                            entry_hdl)
-                else:
-                    if sw.index < neighbor.index:
-                        upstream_ecmp_group.append(
-                            getSwitchInstanceFromPort(self.SWITCH_LIST,
-                                                      next_hop_port))
-                    elif sw.index > neighbor.index:
-                        downstream_ecmp_group.append(
-                            getSwitchInstanceFromPort(self.SWITCH_LIST,
-                                                      next_hop_port))
-            # self.deleteEntries(sw)
-            sw_layer = getLayerFromIndex(self.LAYERS, sw.index)
-            # print("sw_layer = %d" % sw_layer)
-            print("upstream_ecmp_group has %s, downstream_ecmp_group has %s" %
-                  (upstream_ecmp_group, downstream_ecmp_group))
-            if len(upstream_ecmp_group) > 0 or len(downstream_ecmp_group) > 0:
-                self.createEcmpSelectorGroup(sw, downstream_ecmp_group,
-                                             upstream_ecmp_group)
-                if len(upstream_ecmp_group
-                       ) > 0 and sw_layer != self.LAYER_NUMBER - 2:
-                    for dst_index in range(
-                            int(sw.index) + 1, int(self.SWITCH_NUM)):
-                        dst_layer = getLayerFromIndex(self.LAYERS, dst_index)
-                        if dst_layer == sw_layer:
-                            continue
-                        entry_hdl = self.writeEcmpGroupRoutingIpv4Table(
-                            sw,
-                            getSwitchInstanceFromIndex(self.SWITCH_LIST,
-                                                       dst_index).mgr_ipv4,
-                            self.UPSTREAM_GROUP_HANDLE[sw.name])
-                        self.ENTRY_HDL_MAP[
-                            "IngressPipeImpl.ecmp_routing_v4_table"].append(
-                                entry_hdl)
-
-                if len(downstream_ecmp_group) > 0 and sw_layer != 1:
-                    for dst_index in range(int(sw.index)):
-                        dst_layer = getLayerFromIndex(self.LAYERS, dst_index)
-                        if dst_layer == sw_layer:
-                            continue
-                        entry_hdl = self.writeEcmpGroupRoutingIpv4Table(
-                            sw,
-                            getSwitchInstanceFromIndex(self.SWITCH_LIST,
-                                                       dst_index).mgr_ipv4,
-                            self.DOWNSTREAM_GROUP_HANDLE[sw.name])
-                        self.ENTRY_HDL_MAP[
-                            "IngressPipeImpl.ecmp_routing_v4_table"].append(
-                                entry_hdl)
-
-                for sw_index in self.TOR_LIST.keys():
-                    if str(sw_index) != str(sw.index):
-                        host_ipv4 = getHostIpv4FromIndex(str(sw_index))
-                        if int(sw_index) < int(sw.index):
-                            entry_hdl = self.writeEcmpHostRoutingIpv4Table(
-                                sw, host_ipv4,
-                                self.DOWNSTREAM_GROUP_HANDLE[sw.name])
-                            self.ENTRY_HDL_MAP[
-                                "IngressPipeImpl.ecmp_routing_v4_table"].append(
-                                    entry_hdl)
-                        elif int(sw_index) > int(sw.index):
-                            entry_hdl = self.writeEcmpHostRoutingIpv4Table(
-                                sw, host_ipv4,
-                                self.UPSTREAM_GROUP_HANDLE[sw.name])
-                            self.ENTRY_HDL_MAP[
-                                "IngressPipeImpl.ecmp_routing_v4_table"].append(
-                                    entry_hdl)
+    def CalculateTransmitNodes(self):
+        for i in range(12, 24):
+            self.TRANSMIT_NODE_DELAY[str(i)] = MAX_INT
 
     def CalculateStaticNodes(self):
         pass
 
-    def insertSRv6Entries(self, src, dst):
+    def CalculateSegmentList(self, src, dst):
+        print("#" * 10 + " Calculating Segment List " + "#" * 10)
+        segment_list = [getSwitchInstanceFromIndex(dst).mgr_ipv6]
+        min_delay_sw = None
+        min_delay = MAX_INT
+        for sw in range(self.TRANSMIT_NODE_DELAY):
+            print("Delay Register Calculating: sw%d" % (sw.index))
+            delay = 0
+            for p in range(sw.port_ipv6.keys()):
+                print(p)
+                p = p.split("eth")[1]
+                delay += self.getDelayRegister(sw, p)
+            delay /= len(sw.port_ipv6.keys())
+            if delay < min_delay:
+                min_delay_sw = sw
+            self.TRANSMIT_NODE_DELAY[sw] = int(delay)
+        segment_list.append(min_delay_sw.mgr_ipv6)
+        return segment_list
+
+    def insertSRv6Entries(self):
         # src and dst is sw.index in str
         for sw in self.SWITCH_LIST:
             # SRv6 Tables
             entry_hdl = self.writeSRv6MySidTable(sw, sw.mgr_ipv6)
             self.ENTRY_HDL_MAP["IngressPipeImpl.srv6_my_sid"].append(entry_hdl)
-
-        segment_list = []
-        src_sw = getSwitchInstanceFromIndex(src)
-        # dst_sw = getSwitchInstanceFromIndex(dst)
-        dst_host_ipv6 = getHostIpv6FromIndex(dst)
-
-        self.writeSRv6Transit2SegmentsTable(src_sw, dst_host_ipv6, "112",
-                                            segment_list)
+        self.CalculateTransmitNodes()
+        f = open(TRANSMIT_NODES_FILE, 'w')
+        f.truncate()
+        for sw_index in self.TRANSMIT_NODE_DELAY.keys():
+            f.write("%s:" % sw_index)
+            for port in getSwitchInstanceFromIndex(self.SWITCH_LIST,
+                                                   sw_index).next_hop.keys():
+                print(port)
+                f.write("%s" % port.split("eth")[1])
+                f.write(" ")
+            f.write("\n")
+        print("#" * 30 + " Write transmit nodes to file successfully! " +
+              "#" * 30)
+        f.close()
+        # src_sw = getSwitchInstanceFromIndex(src)
+        # # dst_sw = getSwitchInstanceFromIndex(dst)
+        # dst_host_ipv6 = getHostIpv6FromIndex(dst)
+        # segment_list = self.CalculateSegmentList(src, dst)
+        # self.writeSRv6Transit2SegmentsTable(src_sw, dst_host_ipv6,
+        #                                     segment_list)
 
     def controllerMain(self):
         print("Controller connecting to switches ...")
-        self.deleteAllEntries()
+        # self.deleteAllEntries()
+        # Static Entries
         self.insertNormalEntries()
-        # self.insertSRv4Entries()
-        # for i in range(self.SWITCH_NUM):
-        #     print("sw%d is %s" % (i, self.SWITCH_LIST[i]))
-        #     self.getDelayRegister(self.SWITCH_LIST[i])
+        # self.CalculateTransmitNodes()
+        # Dynamic Entries
+        self.insertSRv6Entries()
 
 
 ##########################################################################
 #                             Util FUnctions                             #
 ##########################################################################
-def getDelayRegister(sw):
-    return sw.register_read("EgressPipeImpl.link_delay_register", 0)
+def getDelayRegister(sw, port):
+    return sw.register_read("EgressPipeImpl.link_delay_register", port)
 
 
 def getMacByPortName(port):
@@ -842,6 +747,19 @@ def getLayerFromIndex(layers, index):
                 layers[i][0].split("s")[-1]) > index:
             return i - 1
     return i
+
+
+def initSQLsToDateBase(sql_list):
+    db = MySQLdb.connect(host="127.0.0.1",
+                         user="root",
+                         passwd="123",
+                         db="netinfo",
+                         charset='utf8')
+    cursor = db.cursor()
+    for sql in sql_list:
+        cursor.execute(sql)
+    db.commit()
+    db.close()
 
 
 if __name__ == "__main__":
